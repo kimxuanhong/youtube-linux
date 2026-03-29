@@ -9,8 +9,7 @@ const APP_NAME = 'YouTube'
 const APP_URL = 'https://www.youtube.com/'
 const APP_PARTITION = 'persist:youtube'
 
-const CHROME_UA =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+const CHROME_UA ='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0'
 
 const gotTheLock = app.requestSingleInstanceLock()
 
@@ -26,6 +25,7 @@ if (!gotTheLock) {
   })
 
   app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('enable-features', 'PictureInPicture')
   app.commandLine.appendSwitch('disable-renderer-backgrounding')
   app.commandLine.appendSwitch('disable-background-timer-throttling')
 
@@ -38,7 +38,8 @@ if (!gotTheLock) {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
         nodeIntegration: false,
-        partition: APP_PARTITION
+        partition: APP_PARTITION,
+        enableRemoteModule: true
       }
     })
 
@@ -125,6 +126,30 @@ if (!gotTheLock) {
             };
           }
         }
+
+        // Enable Picture-in-Picture
+        const injectPIP = () => {
+          const video = document.querySelector('video');
+          if (!video) {
+            setTimeout(injectPIP, 1000);
+            return;
+          }
+
+          // Add keyboard shortcut for PIP (P key)
+          document.addEventListener('keydown', (e) => {
+            if (e.key === 'p' || e.key === 'P') {
+              if (video && document.pictureInPictureElement) {
+                document.exitPictureInPicture().catch(err => console.log('PIP exit error:', err));
+              } else if (video) {
+                video.requestPictureInPicture().catch(err => console.log('PIP request error:', err));
+              }
+            }
+          });
+
+          console.log('PIP support enabled');
+        };
+
+        setTimeout(injectPIP, 1000);
       })();
     `
 
