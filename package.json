@@ -1,0 +1,56 @@
+{
+  "name": "youtube-linux",
+  "version": "1.0.0",
+  "main": "main.js",
+  "private": true,
+  "description": "YouTube desktop wrapper for Linux",
+  "homepage": "https://www.youtube.com",
+  "author": {
+    "name": "Hong Kim",
+    "email": "xuanhongkim@gmail.com"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^40.3.0",
+    "electron-builder": "^26.7.0"
+  },
+  "build": {
+    "appId": "com.youtube.linux",
+    "productName": "YouTube",
+    "files": [
+      "**/*",
+      "!build"
+    ],
+    "linux": {
+      "target": [
+        "deb"
+      ],
+      "category": "AudioVideo",
+      "icon": "build/icons",
+      "maintainer": "Hong Kim xuanhongkim@gmail.com",
+      "desktop": {
+        "entry": {
+          "Name": "YouTube",
+          "Comment": "YouTube for Linux",
+          "GenericName": "Video Platform",
+          "Keywords": "youtube;video;music;",
+          "Categories": "AudioVideo;Player;",
+          "StartupWMClass": "youtube-linux"
+        }
+      }
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils"
+      ]
+    }
+  }
+}
