@@ -4,12 +4,14 @@ const path = require('path')
 let win = null
 let tray = null
 let isMuted = false
+let pipOnMinimize = true
 
 const APP_NAME = 'YouTube'
 const APP_URL = 'https://www.youtube.com/'
 const APP_PARTITION = 'persist:youtube'
+const ENABLE_DEVTOOLS = process.env.YT_DEVTOOLS === '1'
 
-const CHROME_UA ='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0'
+const CHROME_UA ='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
 const gotTheLock = app.requestSingleInstanceLock()
 
@@ -28,6 +30,8 @@ if (!gotTheLock) {
   app.commandLine.appendSwitch('enable-features', 'PictureInPicture')
   app.commandLine.appendSwitch('disable-renderer-backgrounding')
   app.commandLine.appendSwitch('disable-background-timer-throttling')
+  // Keep video playing in background
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 
   function createWindow() {
     win = new BrowserWindow({
@@ -45,12 +49,54 @@ if (!gotTheLock) {
 
     win.setMenu(null)
     win.webContents.setUserAgent(CHROME_UA)
+    
+    if (ENABLE_DEVTOOLS) {
+      win.webContents.openDevTools()
+    }
+    
     win.loadURL(APP_URL)
 
     win.webContents.on('did-finish-load', injectNotificationInterceptor)
     win.webContents.on('did-navigate-in-page', injectNotificationInterceptor)
 
     win.once('ready-to-show', () => win.show())
+
+    win.on('minimize', () => {
+      if (pipOnMinimize) {
+        win.webContents.executeJavaScript(`
+          (function() {
+            const events = [
+              new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }),
+              new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }),
+              new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
+            ]
+            
+            events.forEach(evt => document.documentElement.dispatchEvent(evt))
+            
+            setTimeout(() => {
+              const video = document.querySelector('video')
+              if (video && document.pictureInPictureEnabled && !document.pictureInPictureElement) {
+                video.requestPictureInPicture()
+                  .then(() => {})
+                  .catch(err => {})
+              }
+            }, 50)
+          })()
+        `).catch(err => {})
+      }
+    })
+
+    win.on('restore', () => {
+      win.webContents.executeJavaScript(`
+        (function() {
+          if (document.pictureInPictureElement) {
+            document.exitPictureInPicture()
+              .then(() => {})
+              .catch(err => {})
+          }
+        })()
+      `).catch(err => {})
+    })
 
     win.on('close', (e) => {
       if (!app.isQuiting) {
@@ -65,6 +111,12 @@ if (!gotTheLock) {
 
     const script = `
       (function() {
+        // Đảm bảo PiP luôn được báo cáo là có sẵn
+        Object.defineProperty(document, 'pictureInPictureEnabled', {
+          value: true,
+          configurable: true
+        });
+
         if (window.__youtubeNotifInjected) return;
         window.__youtubeNotifInjected = true;
 
@@ -127,7 +179,6 @@ if (!gotTheLock) {
           }
         }
 
-        // Enable Picture-in-Picture
         const injectPIP = () => {
           const video = document.querySelector('video');
           if (!video) {
@@ -135,27 +186,28 @@ if (!gotTheLock) {
             return;
           }
 
-          // Add keyboard shortcut for PIP (P key)
+          video.disablePictureInPicture = false;
+
+          // Tạo sự kiện để kích hoạt lại các nút điều khiển của YouTube nếu bị ẩn
+          video.dispatchEvent(new Event('webkitbeginfullscreen'));
+          video.dispatchEvent(new Event('webkitendfullscreen'));
+
           document.addEventListener('keydown', (e) => {
             if (e.key === 'p' || e.key === 'P') {
               if (video && document.pictureInPictureElement) {
-                document.exitPictureInPicture().catch(err => console.log('PIP exit error:', err));
+                document.exitPictureInPicture().catch(err => {});
               } else if (video) {
-                video.requestPictureInPicture().catch(err => console.log('PIP request error:', err));
+                video.requestPictureInPicture().catch(err => {});
               }
             }
           });
-
-          console.log('PIP support enabled');
         };
 
         setTimeout(injectPIP, 1000);
       })();
     `
 
-    win.webContents.executeJavaScript(script).catch((err) => {
-      console.error('[YouTube] Failed to inject:', err)
-    })
+    win.webContents.executeJavaScript(script).catch((err) => {})
   }
 
   function createTray() {
@@ -210,6 +262,14 @@ if (!gotTheLock) {
               win.webContents.audioMuted = isMuted
               updateTrayMenu()
             }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: pipOnMinimize ? '✓ PiP  (ON)' : '  PiP (OFF)',
+          click: () => {
+            pipOnMinimize = !pipOnMinimize
+            updateTrayMenu()
           }
         },
         { type: 'separator' },
