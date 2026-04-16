@@ -48,6 +48,7 @@ if (!gotTheLock) {
 
     createWindow()
     createTray()
+    refreshMenus()
   })
 
   app.on('window-all-closed', (e) => e.preventDefault())
@@ -107,7 +108,7 @@ function onMinimize() {
         }
       }, 50)
     })()
-  `).catch(() => {})
+  `).catch(() => { })
 }
 
 function onRestore() {
@@ -115,7 +116,7 @@ function onRestore() {
     if (document.pictureInPictureElement) {
       document.exitPictureInPicture().catch(() => {})
     }
-  `).catch(() => {})
+  `).catch(() => { })
 }
 
 function onClose(e) {
@@ -129,7 +130,7 @@ function onClose(e) {
 
 function injectPageScripts() {
   if (!win || win.isDestroyed()) return
-  win.webContents.executeJavaScript(PAGE_SCRIPT).catch(() => {})
+  win.webContents.executeJavaScript(PAGE_SCRIPT).catch(() => { })
 }
 
 // Injected into the renderer. Runs once per navigation; sets up:
@@ -287,12 +288,24 @@ function createTray() {
   rebuildTrayMenu()
 }
 
+function refreshMenus() {
+  const template = buildMenuTemplate()
+
+  // Tray
+  if (tray && !tray.isDestroyed()) {
+    tray.setContextMenu(Menu.buildFromTemplate(template.flatMap(m => m.submenu)))
+  }
+
+  // Global menu
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 function rebuildTrayMenu() {
   const menu = Menu.buildFromTemplate([
-    { label: 'Open',    click: focusWindow },
-    { label: 'Back',    accelerator: 'Alt+Left',  click: () => win?.webContents.canGoBack()    && win.webContents.goBack() },
+    { label: 'Open', click: focusWindow },
+    { label: 'Back', accelerator: 'Alt+Left', click: () => win?.webContents.canGoBack() && win.webContents.goBack() },
     { label: 'Forward', accelerator: 'Alt+Right', click: () => win?.webContents.canGoForward() && win.webContents.goForward() },
-    { label: 'Refresh', accelerator: 'F5',        click: () => win?.webContents.reload() },
+    { label: 'Refresh', accelerator: 'F5', click: () => win?.webContents.reload() },
     { type: 'separator' },
     {
       label: isMuted ? 'Unmute' : 'Mute',
@@ -314,11 +327,49 @@ function rebuildTrayMenu() {
   tray.setContextMenu(menu)
 }
 
+function buildMenuTemplate() {
+  return [
+    {
+      label: 'YouTube',
+      submenu: [
+        { label: 'Open', click: focusWindow },
+        { type: 'separator' },
+        {
+          label: isMuted ? 'Unmute' : 'Mute',
+          accelerator: 'Alt+M',
+          click: () => {
+            isMuted = !isMuted
+            if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
+            refreshMenus()
+          },
+        },
+        {
+          label: pipOnMinimize ? '✓ PiP (ON)' : 'PiP (OFF)',
+          click: () => {
+            pipOnMinimize = !pipOnMinimize
+            refreshMenus()
+          },
+        },
+        { type: 'separator' },
+        { label: 'Exit', click: () => { app.isQuiting = true; app.quit() } },
+      ]
+    },
+    {
+      label: 'Navigation',
+      submenu: [
+        { label: 'Back', accelerator: 'Alt+Left', click: () => win?.webContents.goBack() },
+        { label: 'Forward', accelerator: 'Alt+Right', click: () => win?.webContents.goForward() },
+        { label: 'Refresh', accelerator: 'F5', click: () => win?.webContents.reload() },
+      ]
+    }
+  ]
+}
+
 // ─── MPRIS ────────────────────────────────────────────────────────────────────
 
 function destroyMPRIS() {
   if (!mprisPlayer) return
-  try { mprisPlayer._bus?.disconnect() } catch (_) {}
+  try { mprisPlayer._bus?.disconnect() } catch (_) { }
   mprisPlayer = null
 }
 
@@ -342,14 +393,14 @@ function setupMPRIS() {
       scheduleReconnect()
     })
 
-    const js = (code) => win?.webContents.executeJavaScript(code).catch(() => {})
+    const js = (code) => win?.webContents.executeJavaScript(code).catch(() => { })
     const key = (keyCode, modifiers) => win?.webContents.sendInputEvent({ type: 'keyDown', keyCode, ...(modifiers && { modifiers }) })
 
     mprisPlayer.on('playpause', () => key('k'))
-    mprisPlayer.on('next',      () => key('n', ['shift']))
-    mprisPlayer.on('previous',  () => js('window.history.back()'))
-    mprisPlayer.on('play',      () => js('document.querySelector("video")?.play()'))
-    mprisPlayer.on('pause',     () => js('document.querySelector("video")?.pause()'))
+    mprisPlayer.on('next', () => key('n', ['shift']))
+    mprisPlayer.on('previous', () => js('window.history.back()'))
+    mprisPlayer.on('play', () => js('document.querySelector("video")?.play()'))
+    mprisPlayer.on('pause', () => js('document.querySelector("video")?.pause()'))
   } catch (e) {
     console.error('MPRIS setup error:', e)
     mprisPlayer = null
@@ -365,10 +416,10 @@ ipcMain.on('mpris-update', (_, data) => {
     mprisPlayer.playbackStatus = data.paused ? 'Paused' : 'Playing'
     mprisPlayer.metadata = {
       'mpris:trackid': mprisPlayer.objectPath('track/0'),
-      'xesam:title':   data.title  || 'YouTube',
-      'xesam:artist':  [data.artist || 'YouTube'],
-      'mpris:artUrl':  data.artUrl || 'https://www.youtube.com/favicon.ico',
-      'mpris:length':  data.duration ? data.duration * 1_000_000 : 0,
+      'xesam:title': data.title || 'YouTube',
+      'xesam:artist': [data.artist || 'YouTube'],
+      'mpris:artUrl': data.artUrl || 'https://www.youtube.com/favicon.ico',
+      'mpris:length': data.duration ? data.duration * 1_000_000 : 0,
     }
   } catch (e) {
     const msg = e?.message ?? ''
