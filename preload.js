@@ -4,7 +4,8 @@ contextBridge.exposeInMainWorld('youtubeLinux', {
   notify: (title, body) => {
     ipcRenderer.send('notify', { title, body })
   },
-  badge: (count) => ipcRenderer.send('badge', count)
+  badge: (count) => ipcRenderer.send('badge', count),
+  mprisUpdate: (data) => ipcRenderer.send('mpris-update', data)
 })
 
 window.addEventListener('DOMContentLoaded', () => {

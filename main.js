@@ -1,338 +1,392 @@
 const { app, BrowserWindow, Tray, ipcMain, Notification, Menu, session } = require('electron')
 const path = require('path')
+const Player = require('mpris-service')
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+
+const CONFIG = {
+  appName: 'YouTube',
+  appUrl: 'https://www.youtube.com/',
+  partition: 'persist:youtube',
+  devtools: process.env.YT_DEVTOOLS === '1',
+  userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  iconPath: path.join(__dirname, 'icon.png'),
+  window: { width: 1200, height: 800 },
+}
+
+// ─── State ────────────────────────────────────────────────────────────────────
 
 let win = null
 let tray = null
+let mprisPlayer = null
+let mprisReconnectTimer = null
 let isMuted = false
 let pipOnMinimize = true
 
-const APP_NAME = 'YouTube'
-const APP_URL = 'https://www.youtube.com/'
-const APP_PARTITION = 'persist:youtube'
-const ENABLE_DEVTOOLS = process.env.YT_DEVTOOLS === '1'
-
-const CHROME_UA ='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+// ─── App bootstrap ────────────────────────────────────────────────────────────
 
 const gotTheLock = app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      if (!win.isVisible()) win.show()
-      win.focus()
-    }
-  })
+  app.on('second-instance', focusWindow)
 
   app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling,MediaSessionService')
   app.commandLine.appendSwitch('enable-features', 'PictureInPicture')
   app.commandLine.appendSwitch('disable-renderer-backgrounding')
   app.commandLine.appendSwitch('disable-background-timer-throttling')
-  // Keep video playing in background
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 
-  function createWindow() {
-    win = new BrowserWindow({
-      width: 1200,
-      height: 800,
-      autoHideMenuBar: true,
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        partition: APP_PARTITION,
-        enableRemoteModule: true
-      }
-    })
-
-    win.setMenu(null)
-    win.webContents.setUserAgent(CHROME_UA)
-    
-    if (ENABLE_DEVTOOLS) {
-      win.webContents.openDevTools()
-    }
-    
-    win.loadURL(APP_URL)
-
-    win.webContents.on('did-finish-load', injectNotificationInterceptor)
-    win.webContents.on('did-navigate-in-page', injectNotificationInterceptor)
-
-    win.once('ready-to-show', () => win.show())
-
-    win.on('minimize', () => {
-      if (pipOnMinimize) {
-        win.webContents.executeJavaScript(`
-          (function() {
-            const events = [
-              new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }),
-              new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }),
-              new MouseEvent('click', { bubbles: true, cancelable: true, view: window })
-            ]
-            
-            events.forEach(evt => document.documentElement.dispatchEvent(evt))
-            
-            setTimeout(() => {
-              const video = document.querySelector('video')
-              if (video && document.pictureInPictureEnabled && !document.pictureInPictureElement) {
-                video.requestPictureInPicture()
-                  .then(() => {})
-                  .catch(err => {})
-              }
-            }, 50)
-          })()
-        `).catch(err => {})
-      }
-    })
-
-    win.on('restore', () => {
-      win.webContents.executeJavaScript(`
-        (function() {
-          if (document.pictureInPictureElement) {
-            document.exitPictureInPicture()
-              .then(() => {})
-              .catch(err => {})
-          }
-        })()
-      `).catch(err => {})
-    })
-
-    win.on('close', (e) => {
-      if (!app.isQuiting) {
-        e.preventDefault()
-        win.hide()
-      }
-    })
-  }
-
-  function injectNotificationInterceptor() {
-    if (!win || win.isDestroyed()) return
-
-    const script = `
-      (function() {
-        // Đảm bảo PiP luôn được báo cáo là có sẵn
-        Object.defineProperty(document, 'pictureInPictureEnabled', {
-          value: true,
-          configurable: true
-        });
-
-        if (window.__youtubeNotifInjected) return;
-        window.__youtubeNotifInjected = true;
-
-        function YoutubeNotification(title, options) {
-          options = options || {};
-          if (window.youtubeLinux) {
-            window.youtubeLinux.notify(title, options.body || '');
-          }
-
-          var self = this;
-          self.title = title;
-          self.body = options.body || '';
-          self.icon = options.icon || '';
-          self.tag = options.tag || '';
-          self.close = function(){};
-          self.addEventListener = function(){};
-          self.removeEventListener = function(){};
-          self.onclick = null;
-          self.onclose = null;
-          self.onerror = null;
-          self.onshow = null;
-
-          setTimeout(function() {
-            if (typeof self.onshow === 'function') self.onshow();
-          }, 10);
-        }
-
-        YoutubeNotification.permission = 'granted';
-        YoutubeNotification.requestPermission = function(cb) {
-          var p = Promise.resolve('granted');
-          if (cb) cb('granted');
-          return p;
-        };
-        YoutubeNotification.maxActions = 0;
-
-        Object.defineProperty(window, 'Notification', {
-          value: YoutubeNotification,
-          writable: true,
-          configurable: true
-        });
-
-        if (navigator.serviceWorker) {
-          var origGetReg = navigator.serviceWorker.getRegistration;
-          if (origGetReg) {
-            navigator.serviceWorker.getRegistration = function() {
-              return origGetReg.apply(this, arguments).then(function(reg) {
-                if (reg && reg.showNotification) {
-                  var origShow = reg.showNotification.bind(reg);
-                  reg.showNotification = function(title, opts) {
-                    opts = opts || {};
-                    if (window.youtubeLinux) {
-                      window.youtubeLinux.notify(title, opts.body || '');
-                    }
-                    return origShow(title, opts);
-                  };
-                }
-                return reg;
-              });
-            };
-          }
-        }
-
-        const injectPIP = () => {
-          const video = document.querySelector('video');
-          if (!video) {
-            setTimeout(injectPIP, 1000);
-            return;
-          }
-
-          video.disablePictureInPicture = false;
-
-          // Tạo sự kiện để kích hoạt lại các nút điều khiển của YouTube nếu bị ẩn
-          video.dispatchEvent(new Event('webkitbeginfullscreen'));
-          video.dispatchEvent(new Event('webkitendfullscreen'));
-
-          document.addEventListener('keydown', (e) => {
-            if (e.key === 'p' || e.key === 'P') {
-              if (video && document.pictureInPictureElement) {
-                document.exitPictureInPicture().catch(err => {});
-              } else if (video) {
-                video.requestPictureInPicture().catch(err => {});
-              }
-            }
-          });
-        };
-
-        setTimeout(injectPIP, 1000);
-      })();
-    `
-
-    win.webContents.executeJavaScript(script).catch((err) => {})
-  }
-
-  function createTray() {
-    tray = new Tray(path.join(__dirname, 'icon.png'))
-    tray.setToolTip(APP_NAME)
-
-    const updateTrayMenu = () => {
-      const contextMenu = Menu.buildFromTemplate([
-        {
-          label: 'Open',
-          click: () => {
-            if (win) {
-              win.show()
-              win.focus()
-            }
-          }
-        },
-        {
-          label: 'Back',
-          accelerator: 'Alt+Left',
-          click: () => {
-            if (win && win.webContents.canGoBack()) {
-              win.webContents.goBack()
-            }
-          }
-        },
-        {
-          label: 'Forward',
-          accelerator: 'Alt+Right',
-          click: () => {
-            if (win && win.webContents.canGoForward()) {
-              win.webContents.goForward()
-            }
-          }
-        },
-        {
-          label: 'Refresh',
-          accelerator: 'F5',
-          click: () => {
-            if (win && !win.isDestroyed()) {
-              win.webContents.reload()
-            }
-          }
-        },
-        { type: 'separator' },
-        {
-          label: isMuted ? 'Unmute' : 'Mute',
-          accelerator: 'Alt+M',
-          click: () => {
-            if (win && !win.isDestroyed()) {
-              isMuted = !isMuted
-              win.webContents.audioMuted = isMuted
-              updateTrayMenu()
-            }
-          }
-        },
-        { type: 'separator' },
-        {
-          label: pipOnMinimize ? '✓ PiP  (ON)' : '  PiP (OFF)',
-          click: () => {
-            pipOnMinimize = !pipOnMinimize
-            updateTrayMenu()
-          }
-        },
-        { type: 'separator' },
-        {
-          label: 'Exit',
-          click: () => {
-            app.isQuiting = true
-            app.quit()
-          }
-        }
-      ])
-      tray.setContextMenu(contextMenu)
-    }
-
-    updateTrayMenu()
-
-    tray.on('click', () => {
-      if (win) {
-        win.show()
-        win.focus()
-      }
-    })
-  }
-
   app.whenReady().then(() => {
-    app.userAgentFallback = CHROME_UA
+    app.userAgentFallback = CONFIG.userAgent
 
-    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-      callback(true)
-    })
-
-    session.fromPartition(APP_PARTITION).setPermissionRequestHandler((webContents, permission, callback) => {
-      callback(true)
-    })
+    const allowAllPermissions = (_, __, callback) => callback(true)
+    session.defaultSession.setPermissionRequestHandler(allowAllPermissions)
+    session.fromPartition(CONFIG.partition).setPermissionRequestHandler(allowAllPermissions)
 
     createWindow()
     createTray()
   })
 
-  app.on('window-all-closed', (e) => {
-    e.preventDefault()
-  })
+  app.on('window-all-closed', (e) => e.preventDefault())
 }
 
-ipcMain.on('notify', (event, data) => {
-  const notif = new Notification({
-    title: data.title,
-    body: data.body,
-    icon: path.join(__dirname, 'icon.png')
+// ─── Window ───────────────────────────────────────────────────────────────────
+
+function focusWindow() {
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  if (!win.isVisible()) win.show()
+  win.focus()
+}
+
+function createWindow() {
+  win = new BrowserWindow({
+    ...CONFIG.window,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: CONFIG.partition,
+      enableRemoteModule: true,
+    },
   })
 
-  notif.on('click', () => {
-    if (win) {
-      win.show()
-      win.focus()
+  win.setMenu(null)
+  win.webContents.setUserAgent(CONFIG.userAgent)
+
+  if (CONFIG.devtools) win.webContents.openDevTools()
+
+  win.loadURL(CONFIG.appUrl)
+  setupMPRIS()
+
+  win.webContents.on('did-finish-load', injectPageScripts)
+  win.webContents.on('did-navigate-in-page', injectPageScripts)
+  win.once('ready-to-show', () => win.show())
+  win.on('minimize', onMinimize)
+  win.on('restore', onRestore)
+  win.on('close', onClose)
+}
+
+function onMinimize() {
+  if (!pipOnMinimize) return
+  win.webContents.executeJavaScript(`
+    (function () {
+      const events = ['mousedown', 'mouseup', 'click'].map(
+        type => new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+      )
+      events.forEach(e => document.documentElement.dispatchEvent(e))
+
+      setTimeout(() => {
+        const video = document.querySelector('video')
+        if (video && document.pictureInPictureEnabled && !document.pictureInPictureElement) {
+          video.requestPictureInPicture().catch(() => {})
+        }
+      }, 50)
+    })()
+  `).catch(() => {})
+}
+
+function onRestore() {
+  win.webContents.executeJavaScript(`
+    if (document.pictureInPictureElement) {
+      document.exitPictureInPicture().catch(() => {})
     }
-  })
+  `).catch(() => {})
+}
 
+function onClose(e) {
+  if (!app.isQuiting) {
+    e.preventDefault()
+    win.hide()
+  }
+}
+
+// ─── Page script injection ────────────────────────────────────────────────────
+
+function injectPageScripts() {
+  if (!win || win.isDestroyed()) return
+  win.webContents.executeJavaScript(PAGE_SCRIPT).catch(() => {})
+}
+
+// Injected into the renderer. Runs once per navigation; sets up:
+//   • PiP availability override
+//   • Periodic MPRIS metadata sync
+//   • Native Notification shim (routes to Electron)
+//   • PiP keyboard shortcut (P key)
+const PAGE_SCRIPT = `
+(function () {
+  // Always report PiP as available
+  Object.defineProperty(document, 'pictureInPictureEnabled', { value: true, configurable: true })
+
+  if (window.__ytLinuxInjected) return
+  window.__ytLinuxInjected = true
+
+  // ── MPRIS metadata sync ────────────────────────────────────────────────────
+
+  // Cache so we don't re-probe the same video ID on every 2s tick.
+  let _artUrlCache = { id: null, url: 'https://www.youtube.com/favicon.ico' }
+
+  // Extract the current video ID from the URL (works after SPA navigation too).
+  function currentVideoId() {
+    try { return new URL(location.href).searchParams.get('v') || null } catch (_) { return null }
+  }
+
+  // i.ytimg.com thumbnails are the only source that:
+  //   • always reflects the CURRENT video (keyed by video ID in the URL)
+  //   • survives SPA navigation without stale globals
+  //   • never requires waiting for mediaSession to be populated
+  //
+  // Resolution ladder: maxresdefault (1280×720) → hqdefault (480×360, always exists).
+  // We probe maxres once per video ID using a hidden Image, then cache the result.
+  function resolveArtUrl(videoId) {
+    if (!videoId) return 'https://www.youtube.com/favicon.ico'
+
+    // Return cached result for the same video.
+    if (_artUrlCache.id === videoId) return _artUrlCache.url
+
+    // Optimistically return hqdefault immediately (guaranteed to exist) so the
+    // current sync tick has *something* to send, while we probe for maxres.
+    const hq  = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg'
+    const max = 'https://i.ytimg.com/vi/' + videoId + '/maxresdefault.jpg'
+
+    // Seed the cache with hq right away.
+    _artUrlCache = { id: videoId, url: hq }
+
+    // Probe maxres in the background; update cache if it loads.
+    const img = new Image()
+    img.onload = () => {
+      // YouTube returns a 120×90 placeholder image when maxres doesn't exist.
+      // Any real maxres thumb is at least 1280 wide.
+      if (img.naturalWidth > 120) {
+        _artUrlCache = { id: videoId, url: max }
+      }
+    }
+    img.src = max
+
+    return hq
+  }
+
+  function syncMPRIS() {
+    if (!window.youtubeLinux?.mprisUpdate) return
+
+    const video   = document.querySelector('video')
+    const ms      = navigator.mediaSession?.metadata
+    const videoId = currentVideoId()
+
+    window.youtubeLinux.mprisUpdate({
+      title:    ms?.title || document.title.replace(/\s*[-–]\s*YouTube\s*$/, '').trim() || 'YouTube',
+      artist:   ms?.artist
+                  || document.querySelector('ytd-video-owner-renderer #channel-name a, #channel-name a')?.textContent?.trim()
+                  || 'YouTube',
+      artUrl:   resolveArtUrl(videoId),
+      duration: video && !isNaN(video.duration)    ? Math.floor(video.duration)    : 0,
+      position: video && !isNaN(video.currentTime) ? Math.floor(video.currentTime) : 0,
+      paused:   video ? video.paused : true,
+    })
+  }
+
+  setInterval(syncMPRIS, 2000)
+
+  // Also sync immediately on video src change (catches SPA navigation faster than the 2s tick).
+  const _origPlay = HTMLMediaElement.prototype.play
+  HTMLMediaElement.prototype.play = function () {
+    // Reset art cache so the next syncMPRIS call re-probes for the new video.
+    _artUrlCache = { id: null, url: 'https://www.youtube.com/favicon.ico' }
+    return _origPlay.apply(this, arguments)
+  }
+
+  // ── Notification shim ──────────────────────────────────────────────────────
+
+  function YoutubeNotification(title, options = {}) {
+    window.youtubeLinux?.notify(title, options.body || '')
+    Object.assign(this, { title, body: options.body || '', icon: options.icon || '',
+      tag: options.tag || '', close() {}, addEventListener() {}, removeEventListener() {},
+      onclick: null, onclose: null, onerror: null, onshow: null })
+    setTimeout(() => typeof this.onshow === 'function' && this.onshow(), 10)
+  }
+
+  YoutubeNotification.permission = 'granted'
+  YoutubeNotification.requestPermission = (cb) => {
+    if (cb) cb('granted')
+    return Promise.resolve('granted')
+  }
+  YoutubeNotification.maxActions = 0
+
+  Object.defineProperty(window, 'Notification', { value: YoutubeNotification, writable: true, configurable: true })
+
+  // Patch service-worker notifications too
+  const origGetReg = navigator.serviceWorker?.getRegistration
+  if (origGetReg) {
+    navigator.serviceWorker.getRegistration = function (...args) {
+      return origGetReg.apply(this, args).then(reg => {
+        if (reg?.showNotification) {
+          const orig = reg.showNotification.bind(reg)
+          reg.showNotification = (title, opts = {}) => {
+            window.youtubeLinux?.notify(title, opts.body || '')
+            return orig(title, opts)
+          }
+        }
+        return reg
+      })
+    }
+  }
+
+  // ── PiP setup ─────────────────────────────────────────────────────────────
+
+  function setupPiP() {
+    const video = document.querySelector('video')
+    if (!video) { setTimeout(setupPiP, 1000); return }
+
+    video.disablePictureInPicture = false
+    video.dispatchEvent(new Event('webkitbeginfullscreen'))
+    video.dispatchEvent(new Event('webkitendfullscreen'))
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'p' && e.key !== 'P') return
+      document.pictureInPictureElement
+        ? document.exitPictureInPicture().catch(() => {})
+        : video.requestPictureInPicture().catch(() => {})
+    })
+  }
+
+  setTimeout(setupPiP, 1000)
+})()
+`
+
+// ─── Tray ─────────────────────────────────────────────────────────────────────
+
+function createTray() {
+  tray = new Tray(CONFIG.iconPath)
+  tray.setToolTip(CONFIG.appName)
+  tray.on('click', focusWindow)
+  rebuildTrayMenu()
+}
+
+function rebuildTrayMenu() {
+  const menu = Menu.buildFromTemplate([
+    { label: 'Open',    click: focusWindow },
+    { label: 'Back',    accelerator: 'Alt+Left',  click: () => win?.webContents.canGoBack()    && win.webContents.goBack() },
+    { label: 'Forward', accelerator: 'Alt+Right', click: () => win?.webContents.canGoForward() && win.webContents.goForward() },
+    { label: 'Refresh', accelerator: 'F5',        click: () => win?.webContents.reload() },
+    { type: 'separator' },
+    {
+      label: isMuted ? 'Unmute' : 'Mute',
+      accelerator: 'Alt+M',
+      click: () => {
+        isMuted = !isMuted
+        if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
+        rebuildTrayMenu()
+      },
+    },
+    { type: 'separator' },
+    {
+      label: pipOnMinimize ? '✓ PiP (ON)' : '  PiP (OFF)',
+      click: () => { pipOnMinimize = !pipOnMinimize; rebuildTrayMenu() },
+    },
+    { type: 'separator' },
+    { label: 'Exit', click: () => { app.isQuiting = true; app.quit() } },
+  ])
+  tray.setContextMenu(menu)
+}
+
+// ─── MPRIS ────────────────────────────────────────────────────────────────────
+
+function destroyMPRIS() {
+  if (!mprisPlayer) return
+  try { mprisPlayer._bus?.disconnect() } catch (_) {}
+  mprisPlayer = null
+}
+
+function scheduleReconnect() {
+  if (app.isQuiting) return
+  mprisReconnectTimer = setTimeout(setupMPRIS, 3000)
+}
+
+function setupMPRIS() {
+  if (mprisReconnectTimer) { clearTimeout(mprisReconnectTimer); mprisReconnectTimer = null }
+
+  try {
+    mprisPlayer = new Player({ name: 'youtube', identity: 'YouTube', supportedInterfaces: ['player'] })
+    mprisPlayer.desktopEntry = 'youtube-linux'
+
+    mprisPlayer.on('error', (err) => {
+      const msg = err?.message ?? ''
+      const isStreamClosed = msg.includes('closed stream') || msg.includes('stream is closed')
+      if (!isStreamClosed) console.error('MPRIS error:', err)
+      destroyMPRIS()
+      scheduleReconnect()
+    })
+
+    const js = (code) => win?.webContents.executeJavaScript(code).catch(() => {})
+    const key = (keyCode, modifiers) => win?.webContents.sendInputEvent({ type: 'keyDown', keyCode, ...(modifiers && { modifiers }) })
+
+    mprisPlayer.on('playpause', () => key('k'))
+    mprisPlayer.on('next',      () => key('n', ['shift']))
+    mprisPlayer.on('previous',  () => js('window.history.back()'))
+    mprisPlayer.on('play',      () => js('document.querySelector("video")?.play()'))
+    mprisPlayer.on('pause',     () => js('document.querySelector("video")?.pause()'))
+  } catch (e) {
+    console.error('MPRIS setup error:', e)
+    mprisPlayer = null
+    scheduleReconnect()
+  }
+}
+
+// ─── IPC handlers ─────────────────────────────────────────────────────────────
+
+ipcMain.on('mpris-update', (_, data) => {
+  if (!mprisPlayer) return
+  try {
+    mprisPlayer.playbackStatus = data.paused ? 'Paused' : 'Playing'
+    mprisPlayer.metadata = {
+      'mpris:trackid': mprisPlayer.objectPath('track/0'),
+      'xesam:title':   data.title  || 'YouTube',
+      'xesam:artist':  [data.artist || 'YouTube'],
+      'mpris:artUrl':  data.artUrl || 'https://www.youtube.com/favicon.ico',
+      'mpris:length':  data.duration ? data.duration * 1_000_000 : 0,
+    }
+  } catch (e) {
+    const msg = e?.message ?? ''
+    if (msg.includes('closed stream') || msg.includes('stream is closed')) {
+      mprisPlayer = null
+    } else {
+      console.error('MPRIS metadata error:', e)
+    }
+  }
+})
+
+ipcMain.on('notify', (_, { title, body }) => {
+  const notif = new Notification({ title, body, icon: CONFIG.iconPath })
+  notif.on('click', focusWindow)
   notif.show()
 })
 
-ipcMain.on('badge', (event, count) => {
+ipcMain.on('badge', (_, count) => {
   if (tray && !tray.isDestroyed()) {
-    tray.setToolTip(count > 0 ? `${APP_NAME} (${count})` : APP_NAME)
+    tray.setToolTip(count > 0 ? `${CONFIG.appName} (${count})` : CONFIG.appName)
   }
 })
