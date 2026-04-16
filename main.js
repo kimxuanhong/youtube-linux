@@ -290,12 +290,6 @@ function createTray() {
 
 function refreshMenus() {
   const template = buildMenuTemplate()
-
-  // Tray
-  if (tray && !tray.isDestroyed()) {
-    tray.setContextMenu(Menu.buildFromTemplate(template.flatMap(m => m.submenu)))
-  }
-
   // Global menu
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
