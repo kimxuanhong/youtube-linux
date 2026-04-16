@@ -52,5 +52,8 @@
         "xdg-utils"
       ]
     }
+  },
+  "dependencies": {
+    "mpris-service": "^2.1.2"
   }
 }
