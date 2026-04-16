@@ -165,29 +165,30 @@ const PAGE_SCRIPT = `
   function resolveArtUrl(videoId) {
     if (!videoId) return 'https://www.youtube.com/favicon.ico'
 
-    // Return cached result for the same video.
-    if (_artUrlCache.id === videoId) return _artUrlCache.url
+    // nếu đã resolve rồi thì dùng luôn
+    if (_artUrlCache.id === videoId && _artUrlCache.url) {
+      return _artUrlCache.url
+    }
 
-    // Optimistically return hqdefault immediately (guaranteed to exist) so the
-    // current sync tick has *something* to send, while we probe for maxres.
-    const hq  = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg'
     const max = 'https://i.ytimg.com/vi/' + videoId + '/maxresdefault.jpg'
+    const hq  = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg'
 
-    // Seed the cache with hq right away.
-    _artUrlCache = { id: videoId, url: hq }
+    // 👉 mặc định dùng maxres luôn
+    _artUrlCache = { id: videoId, url: max }
 
-    // Probe maxres in the background; update cache if it loads.
+    // 👉 kiểm tra ngầm, nếu maxres là fake thì fallback
     const img = new Image()
     img.onload = () => {
-      // YouTube returns a 120×90 placeholder image when maxres doesn't exist.
-      // Any real maxres thumb is at least 1280 wide.
-      if (img.naturalWidth > 120) {
-        _artUrlCache = { id: videoId, url: max }
+      if (img.naturalWidth <= 120) {
+        _artUrlCache = { id: videoId, url: hq }
       }
+    }
+    img.onerror = () => {
+      _artUrlCache = { id: videoId, url: hq }
     }
     img.src = max
 
-    return hq
+    return max
   }
 
   function syncMPRIS() {
