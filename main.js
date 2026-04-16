@@ -307,13 +307,18 @@ function rebuildTrayMenu() {
       click: () => {
         isMuted = !isMuted
         if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
+        refreshMenus()
         rebuildTrayMenu()
       },
     },
     { type: 'separator' },
     {
-      label: pipOnMinimize ? '✓ PiP (ON)' : '  PiP (OFF)',
-      click: () => { pipOnMinimize = !pipOnMinimize; rebuildTrayMenu() },
+      label: pipOnMinimize ? 'PiP (ON)' : 'PiP (OFF)',
+      click: () => {
+        pipOnMinimize = !pipOnMinimize;
+        refreshMenus()
+        rebuildTrayMenu()
+      },
     },
     { type: 'separator' },
     { label: 'Exit', click: () => { app.isQuiting = true; app.quit() } },
@@ -335,13 +340,15 @@ function buildMenuTemplate() {
             isMuted = !isMuted
             if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
             refreshMenus()
+            rebuildTrayMenu()
           },
         },
         {
-          label: pipOnMinimize ? '✓ PiP (ON)' : 'PiP (OFF)',
+          label: pipOnMinimize ? 'PiP (ON)' : 'PiP (OFF)',
           click: () => {
             pipOnMinimize = !pipOnMinimize
             refreshMenus()
+            rebuildTrayMenu()
           },
         },
         { type: 'separator' },
