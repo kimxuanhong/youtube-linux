@@ -48,7 +48,6 @@ if (!gotTheLock) {
 
     createWindow()
     createTray()
-    refreshMenus()
   })
 
   app.on('window-all-closed', (e) => e.preventDefault())
@@ -66,7 +65,6 @@ function focusWindow() {
 function createWindow() {
   win = new BrowserWindow({
     ...CONFIG.window,
-    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -76,7 +74,6 @@ function createWindow() {
     },
   })
 
-  win.setMenu(null)
   win.webContents.setUserAgent(CONFIG.userAgent)
 
   if (CONFIG.devtools) win.webContents.openDevTools()
@@ -143,6 +140,7 @@ const PAGE_SCRIPT = `
   // Always report PiP as available
   Object.defineProperty(document, 'pictureInPictureEnabled', { value: true, configurable: true })
 
+  const runtime = window.__ytLinuxRuntime || (window.__ytLinuxRuntime = {})
   if (window.__ytLinuxInjected) return
   window.__ytLinuxInjected = true
 
@@ -211,14 +209,18 @@ const PAGE_SCRIPT = `
     })
   }
 
-  setInterval(syncMPRIS, 2000)
+  if (runtime.mprisInterval) clearInterval(runtime.mprisInterval)
+  runtime.mprisInterval = setInterval(syncMPRIS, 2000)
 
   // Also sync immediately on video src change (catches SPA navigation faster than the 2s tick).
-  const _origPlay = HTMLMediaElement.prototype.play
-  HTMLMediaElement.prototype.play = function () {
-    // Reset art cache so the next syncMPRIS call re-probes for the new video.
-    _artUrlCache = { id: null, url: 'https://www.youtube.com/favicon.ico' }
-    return _origPlay.apply(this, arguments)
+  if (!runtime.playPatched) {
+    runtime.originalHtmlMediaPlay = HTMLMediaElement.prototype.play
+    HTMLMediaElement.prototype.play = function () {
+      // Reset art cache so the next syncMPRIS call re-probes for the new video.
+      _artUrlCache = { id: null, url: 'https://www.youtube.com/favicon.ico' }
+      return runtime.originalHtmlMediaPlay.apply(this, arguments)
+    }
+    runtime.playPatched = true
   }
 
   // ── Notification shim ──────────────────────────────────────────────────────
@@ -260,6 +262,8 @@ const PAGE_SCRIPT = `
   // ── PiP setup ─────────────────────────────────────────────────────────────
 
   function setupPiP() {
+    if (runtime.cleanupPiP) runtime.cleanupPiP()
+
     let activeVideo = null
     let overlay = null
     let hideOverlayTimer = null
@@ -425,6 +429,19 @@ const PAGE_SCRIPT = `
       scheduleOverlayHide()
     }
 
+    function handleKeyDown(e) {
+      if (e.key !== 'p' && e.key !== 'P') return
+      refreshVideoBinding()
+      if (!activeVideo || !isPiPSupported(activeVideo)) return
+      document.pictureInPictureElement
+        ? document.exitPictureInPicture().catch(() => {})
+        : activeVideo.requestPictureInPicture().catch(() => {})
+    }
+
+    function handleViewportChange() {
+      if ((isVideoHovered || isOverlayHovered) && activeVideo) positionOverlay(activeVideo)
+    }
+
     function refreshVideoBinding() {
       attachToVideo(findVideo())
       if (document.pictureInPictureElement && overlay && document.pictureInPictureElement !== activeVideo) {
@@ -433,32 +450,44 @@ const PAGE_SCRIPT = `
       }
     }
 
-    document.addEventListener('keydown', (e) => {
-      if (e.key !== 'p' && e.key !== 'P') return
-      refreshVideoBinding()
-      if (!activeVideo || !isPiPSupported(activeVideo)) return
-      document.pictureInPictureElement
-        ? document.exitPictureInPicture().catch(() => {})
-        : activeVideo.requestPictureInPicture().catch(() => {})
-    })
-
+    document.addEventListener('keydown', handleKeyDown)
     document.addEventListener('enterpictureinpicture', updateOverlayLabel, true)
     document.addEventListener('leavepictureinpicture', updateOverlayLabel, true)
-    window.addEventListener('scroll', () => {
-      if ((isVideoHovered || isOverlayHovered) && activeVideo) positionOverlay(activeVideo)
-    }, true)
-    window.addEventListener('resize', () => {
-      if ((isVideoHovered || isOverlayHovered) && activeVideo) positionOverlay(activeVideo)
-    })
+    window.addEventListener('scroll', handleViewportChange, true)
+    window.addEventListener('resize', handleViewportChange)
 
     const observer = new MutationObserver(refreshVideoBinding)
     observer.observe(document.documentElement, { childList: true, subtree: true })
 
     refreshVideoBinding()
-    setInterval(refreshVideoBinding, 1500)
+    const refreshVideoBindingInterval = setInterval(refreshVideoBinding, 1500)
+
+    runtime.cleanupPiP = () => {
+      clearHideTimer()
+      clearInterval(refreshVideoBindingInterval)
+      observer.disconnect()
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('enterpictureinpicture', updateOverlayLabel, true)
+      document.removeEventListener('leavepictureinpicture', updateOverlayLabel, true)
+      window.removeEventListener('scroll', handleViewportChange, true)
+      window.removeEventListener('resize', handleViewportChange)
+
+      if (activeVideo) {
+        activeVideo.removeEventListener('mouseenter', handleVideoEnter)
+        activeVideo.removeEventListener('mousemove', handleVideoMove)
+        activeVideo.removeEventListener('mouseleave', handleVideoLeave)
+      }
+
+      if (overlay?.isConnected) overlay.remove()
+      runtime.cleanupPiP = null
+    }
   }
 
-  setTimeout(setupPiP, 1000)
+  if (runtime.pipSetupTimer) clearTimeout(runtime.pipSetupTimer)
+  runtime.pipSetupTimer = setTimeout(() => {
+    runtime.pipSetupTimer = null
+    setupPiP()
+  }, 1000)
 })()
 `
 
@@ -471,10 +500,19 @@ function createTray() {
   rebuildTrayMenu()
 }
 
-function refreshMenus() {
-  const template = buildMenuTemplate()
-  // Global menu
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+function refreshTrayMenu() {
+  rebuildTrayMenu()
+}
+
+function setMuted(nextMuted) {
+  isMuted = nextMuted
+  if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
+  refreshTrayMenu()
+}
+
+function togglePiPOnMinimize() {
+  pipOnMinimize = !pipOnMinimize
+  refreshTrayMenu()
 }
 
 function rebuildTrayMenu() {
@@ -487,66 +525,17 @@ function rebuildTrayMenu() {
     {
       label: isMuted ? 'Unmute' : 'Mute',
       accelerator: 'Alt+M',
-      click: () => {
-        isMuted = !isMuted
-        if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
-        refreshMenus()
-        rebuildTrayMenu()
-      },
+      click: () => setMuted(!isMuted),
     },
     { type: 'separator' },
     {
       label: pipOnMinimize ? 'PiP (ON)' : 'PiP (OFF)',
-      click: () => {
-        pipOnMinimize = !pipOnMinimize;
-        refreshMenus()
-        rebuildTrayMenu()
-      },
+      click: togglePiPOnMinimize,
     },
     { type: 'separator' },
     { label: 'Exit', click: () => { app.isQuiting = true; app.quit() } },
   ])
   tray.setContextMenu(menu)
-}
-
-function buildMenuTemplate() {
-  return [
-    {
-      label: 'YouTube',
-      submenu: [
-        { label: 'Open', click: focusWindow },
-        { type: 'separator' },
-        {
-          label: isMuted ? 'Unmute' : 'Mute',
-          accelerator: 'Alt+M',
-          click: () => {
-            isMuted = !isMuted
-            if (win && !win.isDestroyed()) win.webContents.audioMuted = isMuted
-            refreshMenus()
-            rebuildTrayMenu()
-          },
-        },
-        {
-          label: pipOnMinimize ? 'PiP (ON)' : 'PiP (OFF)',
-          click: () => {
-            pipOnMinimize = !pipOnMinimize
-            refreshMenus()
-            rebuildTrayMenu()
-          },
-        },
-        { type: 'separator' },
-        { label: 'Exit', click: () => { app.isQuiting = true; app.quit() } },
-      ]
-    },
-    {
-      label: 'Navigation',
-      submenu: [
-        { label: 'Back', accelerator: 'Alt+Left', click: () => win?.webContents.goBack() },
-        { label: 'Forward', accelerator: 'Alt+Right', click: () => win?.webContents.goForward() },
-        { label: 'Refresh', accelerator: 'F5', click: () => win?.webContents.reload() },
-      ]
-    }
-  ]
 }
 
 // ─── MPRIS ────────────────────────────────────────────────────────────────────
