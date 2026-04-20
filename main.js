@@ -260,19 +260,202 @@ const PAGE_SCRIPT = `
   // ── PiP setup ─────────────────────────────────────────────────────────────
 
   function setupPiP() {
-    const video = document.querySelector('video')
-    if (!video) { setTimeout(setupPiP, 1000); return }
+    let activeVideo = null
+    let overlay = null
+    let hideOverlayTimer = null
+    let isVideoHovered = false
+    let isOverlayHovered = false
 
-    video.disablePictureInPicture = false
-    video.dispatchEvent(new Event('webkitbeginfullscreen'))
-    video.dispatchEvent(new Event('webkitendfullscreen'))
+    function isPiPSupported(video) {
+      return !!(
+        video &&
+        document.pictureInPictureEnabled &&
+        !video.disablePictureInPicture
+      )
+    }
+
+    function clearHideTimer() {
+      if (!hideOverlayTimer) return
+      clearTimeout(hideOverlayTimer)
+      hideOverlayTimer = null
+    }
+
+    function scheduleOverlayHide() {
+      clearHideTimer()
+      hideOverlayTimer = setTimeout(() => {
+        if (!overlay || isVideoHovered || isOverlayHovered) return
+        overlay.style.opacity = '0'
+        overlay.style.pointerEvents = 'none'
+      }, 160)
+    }
+
+    function ensureOverlay() {
+      if (overlay?.isConnected) return overlay
+
+      overlay = document.createElement('button')
+      overlay.type = 'button'
+      overlay.setAttribute('aria-label', 'Picture in Picture')
+      overlay.textContent = 'PiP'
+      Object.assign(overlay.style, {
+        position: 'fixed',
+        zIndex: '2147483647',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '36px',
+        minWidth: '52px',
+        padding: '0 12px',
+        border: '1px solid rgba(255, 255, 255, 0.22)',
+        borderRadius: '999px',
+        background: 'rgba(15, 15, 15, 0.82)',
+        color: '#fff',
+        font: '600 13px system-ui, sans-serif',
+        letterSpacing: '0.02em',
+        cursor: 'pointer',
+        boxShadow: '0 10px 24px rgba(0, 0, 0, 0.28)',
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
+        opacity: '0',
+        transform: 'translateY(0)',
+        transition: 'opacity 140ms ease, transform 140ms ease',
+        pointerEvents: 'none',
+      })
+
+      overlay.addEventListener('mouseenter', () => {
+        isOverlayHovered = true
+        clearHideTimer()
+      })
+      overlay.addEventListener('mouseleave', () => {
+        isOverlayHovered = false
+        scheduleOverlayHide()
+      })
+      overlay.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!activeVideo || !isPiPSupported(activeVideo)) return
+
+        const action = document.pictureInPictureElement === activeVideo
+          ? document.exitPictureInPicture()
+          : activeVideo.requestPictureInPicture()
+
+        action.catch(() => {})
+      })
+
+      document.documentElement.appendChild(overlay)
+      return overlay
+    }
+
+    function updateOverlayLabel() {
+      if (!overlay) return
+      const isActive = document.pictureInPictureElement === activeVideo
+      overlay.setAttribute('aria-label', isActive ? 'Exit Picture in Picture' : 'Picture in Picture')
+      overlay.textContent = isActive ? 'Exit PiP' : 'PiP'
+    }
+
+    function positionOverlay(video) {
+      const button = ensureOverlay()
+      const rect = video.getBoundingClientRect()
+      const minWidth = 220
+      const minHeight = 124
+
+      if (
+        rect.width < minWidth ||
+        rect.height < minHeight ||
+        rect.bottom <= 0 ||
+        rect.right <= 0 ||
+        rect.top >= window.innerHeight ||
+        rect.left >= window.innerWidth
+      ) {
+        button.style.opacity = '0'
+        button.style.pointerEvents = 'none'
+        return
+      }
+
+      const top = Math.max(12, rect.top + 16)
+      const left = Math.max(12, rect.right - button.offsetWidth - 16)
+      button.style.top = top + 'px'
+      button.style.left = left + 'px'
+      button.style.opacity = '1'
+      button.style.pointerEvents = 'auto'
+      updateOverlayLabel()
+    }
+
+    function attachToVideo(video) {
+      if (!video || video === activeVideo) return
+
+      if (activeVideo) {
+        activeVideo.removeEventListener('mouseenter', handleVideoEnter)
+        activeVideo.removeEventListener('mousemove', handleVideoMove)
+        activeVideo.removeEventListener('mouseleave', handleVideoLeave)
+      }
+
+      activeVideo = video
+      activeVideo.disablePictureInPicture = false
+      activeVideo.dispatchEvent(new Event('webkitbeginfullscreen'))
+      activeVideo.dispatchEvent(new Event('webkitendfullscreen'))
+      activeVideo.addEventListener('mouseenter', handleVideoEnter)
+      activeVideo.addEventListener('mousemove', handleVideoMove)
+      activeVideo.addEventListener('mouseleave', handleVideoLeave)
+      updateOverlayLabel()
+    }
+
+    function findVideo() {
+      const candidates = Array.from(document.querySelectorAll('video'))
+      return candidates.find((video) => video.offsetWidth > 0 && video.offsetHeight > 0) || candidates[0] || null
+    }
+
+    function handleVideoEnter(event) {
+      const video = event.currentTarget
+      if (!isPiPSupported(video)) return
+      isVideoHovered = true
+      clearHideTimer()
+      positionOverlay(video)
+    }
+
+    function handleVideoMove(event) {
+      const video = event.currentTarget
+      if (!isPiPSupported(video)) return
+      if (event.buttons) return
+      isVideoHovered = true
+      positionOverlay(video)
+    }
+
+    function handleVideoLeave() {
+      isVideoHovered = false
+      scheduleOverlayHide()
+    }
+
+    function refreshVideoBinding() {
+      attachToVideo(findVideo())
+      if (document.pictureInPictureElement && overlay && document.pictureInPictureElement !== activeVideo) {
+        overlay.style.opacity = '0'
+        overlay.style.pointerEvents = 'none'
+      }
+    }
 
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'p' && e.key !== 'P') return
+      refreshVideoBinding()
+      if (!activeVideo || !isPiPSupported(activeVideo)) return
       document.pictureInPictureElement
         ? document.exitPictureInPicture().catch(() => {})
-        : video.requestPictureInPicture().catch(() => {})
+        : activeVideo.requestPictureInPicture().catch(() => {})
     })
+
+    document.addEventListener('enterpictureinpicture', updateOverlayLabel, true)
+    document.addEventListener('leavepictureinpicture', updateOverlayLabel, true)
+    window.addEventListener('scroll', () => {
+      if ((isVideoHovered || isOverlayHovered) && activeVideo) positionOverlay(activeVideo)
+    }, true)
+    window.addEventListener('resize', () => {
+      if ((isVideoHovered || isOverlayHovered) && activeVideo) positionOverlay(activeVideo)
+    })
+
+    const observer = new MutationObserver(refreshVideoBinding)
+    observer.observe(document.documentElement, { childList: true, subtree: true })
+
+    refreshVideoBinding()
+    setInterval(refreshVideoBinding, 1500)
   }
 
   setTimeout(setupPiP, 1000)
