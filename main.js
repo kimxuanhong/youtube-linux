@@ -170,6 +170,18 @@ function createApplicationMenu() {
     },
     { role: 'editMenu' },
     { role: 'viewMenu' },
+    {
+      label: isMac ? 'Library' : '&Library',
+      submenu: [
+        { label: 'History', click: () => openYoutubePath('/feed/history') },
+        { label: 'Playlists', click: () => openYoutubePath('/feed/playlists') },
+        { label: 'Watch Later', click: () => openYoutubePath('/playlist?list=WL') },
+        { label: 'Liked Videos', click: () => openYoutubePath('/playlist?list=LL') },
+        { label: 'Your Videos', click: () => openYoutubePath('/feed/you') },
+        { label: 'Downloads', click: () => openYoutubePath('/feed/downloads') },
+        { label: 'Courses', click: () => openYoutubePath('/feed/courses_destination') },
+      ],
+    },
     { role: 'windowMenu' },
     {
       role: 'help',
@@ -572,6 +584,12 @@ function setMuted(nextMuted) {
 function togglePiPOnMinimize() {
   pipOnMinimize = !pipOnMinimize
   refreshTrayMenu()
+}
+
+function openYoutubePath(targetPath) {
+  if (!win || win.isDestroyed()) return
+  focusWindow()
+  win.loadURL(new URL(targetPath, CONFIG.appUrl).toString()).catch(() => { })
 }
 
 function rebuildTrayMenu() {
