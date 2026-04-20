@@ -1,5 +1,6 @@
-const { app, BrowserWindow, Tray, ipcMain, Notification, Menu, session } = require('electron')
+const { app, BrowserWindow, Tray, ipcMain, Notification, Menu, dialog, session } = require('electron')
 const path = require('path')
+const pkg = require('./package.json')
 const Player = require('mpris-service')
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -31,6 +32,9 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', focusWindow)
+  app.on('before-quit', () => {
+    app.isQuiting = true
+  })
 
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling,MediaSessionService')
@@ -46,6 +50,7 @@ if (!gotTheLock) {
     session.defaultSession.setPermissionRequestHandler(allowAllPermissions)
     session.fromPartition(CONFIG.partition).setPermissionRequestHandler(allowAllPermissions)
 
+    createApplicationMenu()
     createWindow()
     createTray()
   })
@@ -121,6 +126,60 @@ function onClose(e) {
     e.preventDefault()
     win.hide()
   }
+}
+
+
+function forceExitApp() {
+  app.isQuiting = true
+  app.exit(0)
+}
+
+function showAboutDialog() {
+  const details = [
+    pkg.description || 'Desktop wrapper for YouTube',
+    '',
+    `Version: ${pkg.version || app.getVersion()}`,
+    `Author: ${pkg.author?.name || 'Unknown'}`,
+    pkg.author?.email ? `Contact: ${pkg.author.email}` : null,
+    pkg.homepage ? `Homepage: ${pkg.homepage}` : null,
+  ].filter(Boolean).join('\n')
+
+  dialog.showMessageBox({
+    type: 'info',
+    title: `About ${CONFIG.appName}`,
+    message: CONFIG.appName,
+    detail: details,
+    icon: CONFIG.iconPath,
+    buttons: ['OK'],
+    defaultId: 0,
+    noLink: true,
+  }).catch(() => { })
+}
+
+function createApplicationMenu() {
+  const isMac = process.platform === 'darwin'
+  const template = [
+    ...(isMac ? [{ role: 'appMenu' }] : []),
+    {
+      label: isMac ? 'File' : '&File',
+      submenu: [
+        { role: 'close' },
+        { type: 'separator' },
+        { label: 'Exit', click: forceExitApp },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        { label: `About`, click: showAboutDialog },
+      ],
+    },
+  ]
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 // ─── Page script injection ────────────────────────────────────────────────────
@@ -533,7 +592,7 @@ function rebuildTrayMenu() {
       click: togglePiPOnMinimize,
     },
     { type: 'separator' },
-    { label: 'Exit', click: () => { app.isQuiting = true; app.quit() } },
+    { label: 'Exit', click: forceExitApp },
   ])
   tray.setContextMenu(menu)
 }
