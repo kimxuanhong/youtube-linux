@@ -173,13 +173,12 @@ function createApplicationMenu() {
     {
       label: isMac ? 'Library' : '&Library',
       submenu: [
-        { label: 'History', click: () => openYoutubePath('/feed/history') },
-        { label: 'Playlists', click: () => openYoutubePath('/feed/playlists') },
-        { label: 'Watch Later', click: () => openYoutubePath('/playlist?list=WL') },
-        { label: 'Liked Videos', click: () => openYoutubePath('/playlist?list=LL') },
-        { label: 'Your Videos', click: () => openYoutubePath('/feed/you') },
-        { label: 'Downloads', click: () => openYoutubePath('/feed/downloads') },
-        { label: 'Courses', click: () => openYoutubePath('/feed/courses_destination') },
+        { label: 'History', click: () => openYoutubePath('/feed/history', "//a[@href='/feed/history']") },
+        { label: 'Playlists', click: () => openYoutubePath('/feed/playlists', "//a[@href='/feed/playlists']") },
+        { label: 'Watch Later', click: () => openYoutubePath('/playlist?list=WL', "//a[@href='/playlist?list=WL']") },
+        { label: 'Liked Videos', click: () => openYoutubePath('/playlist?list=LL', "//a[@href='/playlist?list=LL']") },
+        { label: 'Your Videos', click: () => openYoutubePath('/feed/you', "//a[@href='/feed/you']") },
+        { label: 'Downloads', click: () => openYoutubePath('/feed/downloads', "//a[@href='/feed/downloads']") },
       ],
     },
     { role: 'windowMenu' },
@@ -586,10 +585,65 @@ function togglePiPOnMinimize() {
   refreshTrayMenu()
 }
 
-function openYoutubePath(targetPath) {
+function openYoutubePath(targetPath, xpath) {
   if (!win || win.isDestroyed()) return
   focusWindow()
-  win.loadURL(new URL(targetPath, CONFIG.appUrl).toString()).catch(() => { })
+
+  const script = `
+    (async function() {
+      function getByXpath(xp) {
+        return document.evaluate(
+          xp,
+          document,
+          null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE,
+          null
+        ).singleNodeValue;
+      }
+
+      // 1. mở sidebar nếu chưa mở
+      const guideBtn = getByXpath("//button[@aria-label='Guide' or @aria-label='Open guide']");
+      const app = document.querySelector("ytd-app");
+
+      const isOpen = app && app.hasAttribute("guide-persistent-and-visible");
+
+      if (!isOpen && guideBtn) {
+        guideBtn.click();
+        await new Promise(r => setTimeout(r, 400));
+      }
+
+      // 2. build xpath list
+      const customXpath = ${xpath ? `\`${xpath}\`` : 'null'};
+      const xpaths = customXpath ? [customXpath] : [
+        "//a[@href='${targetPath}']",
+        "//a[contains(@href, '${targetPath}')]"
+      ];
+
+      // 3. retry tìm element (vì YouTube render chậm)
+      for (let i = 0; i < 5; i++) {
+        for (const xp of xpaths) {
+          const el = getByXpath(xp);
+          if (el) {
+            el.click();
+            return true;
+          }
+        }
+        await new Promise(r => setTimeout(r, 300));
+      }
+
+      return false;
+    })()
+  `;
+
+  win.webContents.executeJavaScript(script)
+    .then(clicked => {
+      if (!clicked) {
+        win.loadURL(new URL(targetPath, CONFIG.appUrl).toString()).catch(() => { })
+      }
+    })
+    .catch(() => {
+      win.loadURL(new URL(targetPath, CONFIG.appUrl).toString()).catch(() => { })
+    })
 }
 
 function rebuildTrayMenu() {
