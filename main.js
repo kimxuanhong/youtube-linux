@@ -131,7 +131,22 @@ function onClose(e) {
 
 function forceExitApp() {
   app.isQuiting = true
-  app.exit(0)
+  
+  if (mprisPlayer) {
+    try {
+      mprisPlayer.playbackStatus = 'Paused'
+      setTimeout(() => {
+        destroyMPRIS()
+        app.exit(0)
+      }, 200)
+    } catch (e) {
+      destroyMPRIS()
+      app.exit(0)
+    }
+  } else {
+    destroyMPRIS()
+    app.exit(0)
+  }
 }
 
 function showAboutDialog() {
