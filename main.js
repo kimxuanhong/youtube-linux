@@ -703,6 +703,9 @@ function setupMPRIS() {
   try {
     mprisPlayer = new Player({ name: 'youtube', identity: 'YouTube', supportedInterfaces: ['player'] })
     mprisPlayer.desktopEntry = 'youtube-linux'
+    
+    // Bật tính năng seek
+    mprisPlayer.canSeek = true
 
     mprisPlayer.on('error', (err) => {
       const msg = err?.message ?? ''
@@ -720,6 +723,32 @@ function setupMPRIS() {
     mprisPlayer.on('previous', () => js('window.history.back()'))
     mprisPlayer.on('play', () => js('document.querySelector("video")?.play()'))
     mprisPlayer.on('pause', () => js('document.querySelector("video")?.pause()'))
+    
+    // Xử lý seek - position tính bằng microseconds
+    mprisPlayer.on('seek', (offset) => {
+      const offsetSeconds = offset / 1_000_000
+      js(`
+        (function() {
+          const video = document.querySelector('video');
+          if (video && !isNaN(video.currentTime)) {
+            video.currentTime = Math.max(0, Math.min(video.currentTime + ${offsetSeconds}, video.duration || 0));
+          }
+        })()
+      `)
+    })
+    
+    // Xử lý position - nhảy đến vị trí cụ thể (tính bằng microseconds)
+    mprisPlayer.on('position', (event) => {
+      const positionSeconds = event.position / 1_000_000
+      js(`
+        (function() {
+          const video = document.querySelector('video');
+          if (video && !isNaN(video.duration)) {
+            video.currentTime = Math.max(0, Math.min(${positionSeconds}, video.duration));
+          }
+        })()
+      `)
+    })
   } catch (e) {
     console.error('MPRIS setup error:', e)
     mprisPlayer = null
@@ -739,6 +768,11 @@ ipcMain.on('mpris-update', (_, data) => {
       'xesam:artist': [data.artist || 'YouTube'],
       'mpris:artUrl': data.artUrl || 'https://www.youtube.com/favicon.ico',
       'mpris:length': data.duration ? data.duration * 1_000_000 : 0,
+    }
+    
+    // Cập nhật position cho MPRIS (tính bằng microseconds)
+    if (data.position !== undefined && !isNaN(data.position)) {
+      mprisPlayer.getPosition = () => data.position * 1_000_000
     }
   } catch (e) {
     const msg = e?.message ?? ''
