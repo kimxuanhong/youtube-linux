@@ -171,6 +171,35 @@ function showAboutDialog() {
   }).catch(() => { })
 }
 
+function clearAppCache() {
+  if (!win || win.isDestroyed()) return
+
+  dialog.showMessageBox(win, {
+    type: 'question',
+    title: 'Clear Cache',
+    message: 'Clear all cached data?',
+    detail: 'This will clear thumbnails, images, and other cached content. Your login will be preserved.',
+    buttons: ['Cancel', 'Clear Cache'],
+    defaultId: 1,
+    cancelId: 0,
+  }).then(({ response }) => {
+    if (response !== 1) return
+
+    const ses = session.fromPartition(CONFIG.partition)
+    // Chỉ xóa cache, KHÔNG xóa cookies/localStorage (giữ nguyên đăng nhập)
+    Promise.all([
+      ses.clearCache(),
+      ses.clearStorageData({
+        storages: ['appcache', 'filesystem', 'shadercache', 'serviceworkers', 'cachestorage'],
+      }),
+    ]).then(() => {
+      win.webContents.reload()
+    }).catch((err) => {
+      console.error('Clear cache error:', err)
+    })
+  }).catch(() => {})
+}
+
 function createApplicationMenu() {
   const isMac = process.platform === 'darwin'
   const template = [
@@ -179,6 +208,8 @@ function createApplicationMenu() {
       label: isMac ? 'File' : '&File',
       submenu: [
         { role: 'close' },
+        { type: 'separator' },
+        { label: 'Clear Cache...', click: clearAppCache },
         { type: 'separator' },
         { label: 'Exit', click: forceExitApp },
       ],
@@ -678,6 +709,8 @@ function rebuildTrayMenu() {
       label: pipOnMinimize ? 'PiP (ON)' : 'PiP (OFF)',
       click: togglePiPOnMinimize,
     },
+    { type: 'separator' },
+    { label: 'Clear Cache...', click: clearAppCache },
     { type: 'separator' },
     { label: 'Exit', click: forceExitApp },
   ])
