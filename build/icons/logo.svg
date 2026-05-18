@@ -1,6 +1,0 @@
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <rect width="512" height="512" rx="92" ry="92" fill="#FFFFFF"/>
-  <rect x="32" y="288" width="448" height="160" rx="40" ry="40" fill="#FF0000"/>
-  <text x="50%" y="18%" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="72" font-weight="700" fill="#000000">YOU</text>
-  <text x="50%" y="70%" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="48" font-weight="700" fill="#FFFFFF">MUSIC</text>
-</svg>
