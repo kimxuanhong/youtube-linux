@@ -1,11 +1,8 @@
 const { ipcRenderer, contextBridge } = require('electron')
 
 contextBridge.exposeInMainWorld('youtubeLinux', {
-  notify: (title, body) => {
-    ipcRenderer.send('notify', { title, body })
-  },
+  notify: (title, body) => ipcRenderer.send('notify', { title, body }),
   badge: (count) => ipcRenderer.send('badge', count),
-  mprisUpdate: (data) => ipcRenderer.send('mpris-update', data)
 })
 
 window.addEventListener('DOMContentLoaded', () => {

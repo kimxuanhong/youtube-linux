@@ -1,10 +1,10 @@
 {
-  "name": "youtube-linux",
+  "name": "youtube-music-linux",
   "version": "1.0.0",
   "main": "main.js",
   "private": true,
-  "description": "YouTube desktop wrapper for Linux",
-  "homepage": "https://www.youtube.com",
+  "description": "YouTube Music desktop wrapper for Linux",
+  "homepage": "https://music.youtube.com",
   "author": {
     "name": "Hong Kim",
     "email": "xuanhongkim@gmail.com"
@@ -18,8 +18,8 @@
     "electron-builder": "^26.7.0"
   },
   "build": {
-    "appId": "com.youtube.linux",
-    "productName": "YouTube",
+    "appId": "com.youtube.music.linux",
+    "productName": "YouTube Music",
     "files": [
       "**/*",
       "!build"
@@ -33,12 +33,12 @@
       "maintainer": "Hong Kim xuanhongkim@gmail.com",
       "desktop": {
         "entry": {
-          "Name": "YouTube",
-          "Comment": "YouTube for Linux",
-          "GenericName": "Video Platform",
-          "Keywords": "youtube;video;music;",
+          "Name": "YouTube Music",
+          "Comment": "YouTube Music for Linux",
+          "GenericName": "Music Platform",
+          "Keywords": "youtube;music;audio;",
           "Categories": "AudioVideo;Player;",
-          "StartupWMClass": "youtube-linux"
+          "StartupWMClass": "youtube-music-linux"
         }
       }
     },
@@ -54,6 +54,5 @@
     }
   },
   "dependencies": {
-    "mpris-service": "^2.1.2"
   }
 }
